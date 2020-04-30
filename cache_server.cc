@@ -12,6 +12,7 @@
 #include <boost/beast/version.hpp>
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/strand.hpp>
+#include <boost/asio/signal_set.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/config.hpp>
 #include <boost/program_options.hpp>
@@ -21,6 +22,8 @@
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <sstream>
+#include <thread>
+#include <mutex>
 
 // Use boost to parse command line and beast for server
 namespace parse_cmd = boost::program_options;
@@ -29,6 +32,7 @@ namespace http = beast::http;           // from <boost/beast/http.hpp>
 namespace net = boost::asio;            // from <boost/asio.hpp>
 namespace pt = boost::property_tree;	// from <boost/property_tree.hpp>
 using tcp = boost::asio::ip::tcp;       // from <boost/asio/ip/tcp.hpp>
+auto mutex = std::mutex(); // set up mutex
 
 // This function produces an HTTP response for the given
 // request. The type of the response object depends on the
@@ -111,8 +115,11 @@ handle_request(
 
 	// Add requested key/value pair to cache
 	Cache::size_type sz = temp.length();
+    mutex.lock();
+    //std::cout<<"My face feels like"<<std::endl;
     cache_->set(key,value,sz); //create or replace k,v pair in cache
-	//assert(*cache_->get(key,sz) == *value); //check that this worked properly
+    mutex.unlock();
+    //assert(*cache_->get(key,sz) == *value); //check that this worked properly
 
 	// Build response and send!
         http::response<http::string_body> res{http::status::ok,req.version()};
@@ -123,6 +130,7 @@ handle_request(
     }
 
 
+
   // Handle get
   if(req.method() == http::verb::get) {
 
@@ -131,7 +139,10 @@ handle_request(
 
 	// try to get key from cache :)
 	Cache::size_type sz = 0;
-	Cache::val_type value = cache_->get(key,sz);
+    Cache::val_type value;
+    //mutex.lock();
+	value = cache_->get(key,sz); // might not need lock for get request
+    //mutex.unlock();
 	if (value) {
 
 		//build json
@@ -166,25 +177,31 @@ handle_request(
 	std::string key = req.target().to_string().substr(1,req.target().to_string().length());
 	
 	// Delete from cache if found
-	if (cache_->del(key)){
-	
+    bool temp;
+    mutex.lock();
+    //std::cout<<"DELELELELE"<<std::endl;
+    temp = cache_->del(key);
+    mutex.unlock();
+	if (temp){
 	// Build success response and send!
         http::response<http::string_body> res{http::status::ok,req.version()};
 	res.body() = "Key '" + key + "' and associated value deleted from cache!\n";
         res.keep_alive(req.keep_alive());
 	return send(std::move(res));
-	
 	}
 
-	// if key not found, tell the client :(
-	else {
+
+    // if key not found, tell the client :(
+    else {
         http::response<http::string_body> res{http::status::not_found,req.version()};
-	res.body() = "Key '" + key + "' not found in cache!\n";
+    res.body() = "Key '" + key + "' not found in cache!\n";
         res.keep_alive(req.keep_alive());
-	return send(std::move(res));
-	}
-  }
+    return send(std::move(res));
+    }
+    
 
+
+}
 
   //handle head
   if(req.method() == http::verb::head) {
@@ -202,13 +219,13 @@ handle_request(
 		
 	// if target is "reset", reset cache
 	if (req.target().to_string() == "/reset"){
-
+        mutex.lock(); // we're accessing protected data so lock!
 		cache_->reset(); // Reset cache
-
+        mutex.unlock();
 		// Build success response and send!
 		http::response<http::string_body> res{http::status::ok,req.version()};
 		res.body() = "Cache reset!\n";
-        	res.keep_alive(req.keep_alive());
+        res.keep_alive(req.keep_alive());
 		return send(std::move(res));
 
 	}
@@ -505,6 +522,7 @@ int main(int argc, const char* argv[]){
 		return 0;
 	}
     std::cout<<maxmem<< "<- maxmem"<<std::endl;
+    std::cout<<threads<< "<- threads"<<std::endl;
 
     if (vm.count("m")) {
         std::cout << "Maxmem set to " << " 222 HUrt" << std::endl;
@@ -543,11 +561,35 @@ int main(int argc, const char* argv[]){
 	)->run();
 
 	std::cout << "Server Up and Running..."<< std::endl;
-    
-	// Run the I/O service on one thread
-	ioc.run();
+ 
 
+  // Capture SIGINT and SIGTERM to perform a clean shutdown
+       // Capture SIGINT and SIGTERM to perform a clean shutdown
+    boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
+    signals.async_wait(
+        [&](boost::system::error_code const&, int)
+        {
+            // Stop the `io_context`. This will cause `run()`
+            // to return immediately, eventually destroying the
+            // `io_context` and all of the sockets in it.
+            ioc.stop();
+        });
+	// Run the I/O service on one thread        //from here
+    std::vector<std::thread> v;
+    v.reserve(threads - 1);
+    for(auto i = threads - 1; i > 0; --i)
+        v.emplace_back(
+        [&ioc]
+        {   
+            ioc.run();
+        });                                     //to here from boost code ~Arthur
+
+	   ioc.run();
+
+    // Block until all the threads exit
+    for(auto& t : v)
+        t.join();
+    //delete &cache;
     delete evictor; //d
-
 	return 1;
 }

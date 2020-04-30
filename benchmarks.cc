@@ -49,7 +49,10 @@ Cache::val_type to_val(std::string string){
 
 // Creates and returns a ready-to-run cache. Yum!
 void warm_cache(int keys, Cache* cache){
-    keys = keys / WARM_CACHE_DIVIDER;
+    if (keys < 30)
+        {keys = keys * WARM_CACHE_DIVIDER;}
+    else
+        {keys = keys / WARM_CACHE_DIVIDER;}
 
     for (int j = 0; j<keys;j++){
 		std::uniform_int_distribution<int> key_distribution(1,LARGEST_KEY_SZ-1); // generate random keys
@@ -141,8 +144,9 @@ double work_get(Cache* cache){
     double duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
     duration*=pow(10,-3);
     Cache::val_type val = cache->get(key, sz);
-
+    
     if( val == nullptr){
+        /*
         auto it1 = std::find(COMMON_KEYS.begin(), COMMON_KEYS.end(), key); // check both pools for the key
         auto it2 = std::find(RARE_KEYS.begin(), RARE_KEYS.end(), key);
         if (it1 != COMMON_KEYS.end()){
@@ -153,11 +157,12 @@ double work_get(Cache* cache){
     else if (it2 != RARE_KEYS.end()) {
         RARE_KEYS.erase(it2);
     }
+    */
         REQ_MISSES++;
         return duration;
 
     }
-
+    
     if (val != nullptr || *val == 'H') { //'H' is only letter not in valid character list, used to detect json bug
     REQ_HITS++; // if we successfully found a key, increment hit count
     }
@@ -206,7 +211,7 @@ double generate(int n_req, Cache* cache){ //number of requests generated
 
     
         int req = req_list[rand() % 30];
-        //req =1;
+        //req = 1;
     
         if (req == 3){
             time = work_del(cache);
@@ -221,11 +226,12 @@ double generate(int n_req, Cache* cache){ //number of requests generated
         
 
 	}   
+    //double hit_rate = REQ_HITS / n_gets;
+    //std::cout << hit_rate << " percent is the hit_rate"<<std::endl;
 	return time;
 	//double false_misses = cache->get_false_misses(); // add false misses into the mix ;) quick fixes hehe	
     //double false_misses = 21.0;
-	//double hit_rate = REQ_HITS / n_gets;
-	//std::cout << hit_rate << " percent is the hit_rate" std::endl;
+	
 }
 
 //int main(){return 1;}
